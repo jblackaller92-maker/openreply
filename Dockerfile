@@ -1,59 +1,54 @@
-# OpenReply — self-hosted Docker image
+# Imagen única para los dos procesos de openreply: la web (`next start`) y el
+# worker de la cola (`tsx worker/dm-worker.ts`). Comparten el mismo código y las
+# mismas dependencias, así que separarlas en dos imágenes solo duplicaría el
+# build de Next —el paso caro— sin ganar nada.
 #
-# Two runtime processes ship from this image:
-#   - web:    `npm run start`  → next start (needs .next + node_modules)
-#   - worker: `npm run worker` → tsx worker/dm-worker.ts (runs RAW TypeScript,
-#             not a bundled output — needs the generated Prisma client, the
-#             full source tree under lib/ and worker/, and tsconfig.json for
-#             the `@/*` path alias tsx resolves at runtime)
-#   - cron:   `sh scripts/cron.sh` → the scheduler for /api/cron, which nothing
-#             runs off Vercel (see docs/deploy-dokploy.md). It needs scripts/
-#             in the image and wget on PATH; node:20-slim ships neither.
-#
-# next.config.ts does not set `output: "standalone"`, so `next start` already
-# requires the full node_modules tree at runtime — there is no slimmer
-# standalone bundle to fall back to here. Given that, this Dockerfile does
-# NOT try to strip node_modules/tsconfig.json/source files out of the final
-# stage: doing so is exactly what breaks the worker (MODULE_NOT_FOUND on
-# `@/lib/...` imports, because tsx has no tsconfig to resolve the alias
-# against, and no app/generated/prisma to import from).
+# No se usa `output: "standalone"` a propósito: el trazado de standalone solo
+# cubre la app de Next, y el worker se quedaría sin sus módulos. La imagen pesa
+# más; a cambio los dos procesos arrancan del mismo lugar.
 
-FROM node:20-slim AS build
+FROM node:26-slim AS base
+# openssl lo pide el cliente de Prisma; ca-certificates, las llamadas a Meta.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
+# ── dependencias ──────────────────────────────────────────────────────────
+FROM base AS deps
 COPY package.json package-lock.json ./
-RUN npm ci
+COPY prisma ./prisma
+# `npm ci` corre el postinstall que genera el cliente de Prisma. npm 11 lo
+# bloquea si no se pide explícitamente, así que se llama aparte más abajo.
+RUN npm ci --ignore-scripts
+RUN npx prisma generate
 
+# ── build ─────────────────────────────────────────────────────────────────
+FROM base AS build
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# `npm run build` = `prisma generate && next build` (see package.json) —
-# generates app/generated/prisma AND compiles .next/ in one step.
+RUN npx prisma generate
+ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-FROM node:20-slim AS runner
-WORKDIR /app
+# ── imagen final ──────────────────────────────────────────────────────────
+FROM base AS runner
 ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=3000
 
-# scripts/cron.sh calls the /api/cron routes with wget, which node:20-slim does
-# not include.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends wget ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+# Se copia el árbol COMPLETO del build, no una lista de carpetas escogidas a
+# mano. Escogerlas a mano fue justo lo que rompió el worker en el primer
+# intento: el cliente de Prisma se genera en `app/generated/prisma` (lo dice
+# el `output` del generador) y `prisma.config.ts` vive en la raíz —de ahí sale
+# la URL de la base para `migrate deploy`—. Ninguno de los dos estaba en la
+# lista, y un módulo que falta no se nota hasta que el proceso arranca.
+COPY --from=build /app ./
 
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/app/generated ./app/generated
-COPY --from=build /app/public ./public
-COPY --from=build /app/lib ./lib
-COPY --from=build /app/worker ./worker
-COPY --from=build /app/prisma ./prisma
-COPY --from=build /app/scripts ./scripts
-COPY --from=build /app/prisma.config.ts ./prisma.config.ts
-COPY --from=build /app/next.config.ts ./next.config.ts
-COPY --from=build /app/tsconfig.json ./tsconfig.json
-COPY --from=build /app/package.json ./package.json
+# No corre como root: si algún día un contenedor se compromete, que no herede
+# la máquina.
+RUN useradd --system --uid 1001 openreply && chown -R openreply:openreply /app
+USER openreply
 
 EXPOSE 3000
-# Default to the web process — the worker service overrides this with
-# `command: ["npm", "run", "worker"]` in whatever compose/stack file deploys
-# it (see openreply-vps.stack.yml in EvolutionAPI/omni-nexus for an example).
 CMD ["npm", "run", "start"]

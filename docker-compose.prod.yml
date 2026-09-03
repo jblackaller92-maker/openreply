@@ -1,0 +1,95 @@
+# openreply — producción (VPS de Hostinger, detrás del Traefik de Dokploy).
+#
+# NO es el docker-compose.yml del repo: ese es de desarrollo local y publica
+# Postgres y Redis en puertos abiertos con la contraseña "postgres". En un VPS
+# eso sería una base de datos regalada, porque Docker escribe sus reglas por
+# debajo de ufw y el firewall no las detiene. Aquí NINGÚN servicio publica
+# puertos: se hablan por la red interna, y sólo la web sale al mundo, vía
+# Traefik.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: openreply
+      POSTGRES_USER: openreply
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openreply -d openreply"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?falta REDIS_PASSWORD}", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    # Los dos procesos comparten UNA imagen. Si cada servicio declarara su
+    # propio `build: .`, compose armaría dos imágenes distintas del mismo
+    # código y un `build web` dejaría al worker con la versión anterior —que
+    # es exactamente lo que pasó la primera vez.
+    build: .
+    image: openreply:latest
+    restart: unless-stopped
+    # Las migraciones corren aquí y no en el worker: si arrancaran en los dos a
+    # la vez, dos `prisma migrate deploy` compiten por la misma tabla de
+    # historial y uno de ellos falla.
+    command: sh -c "npx prisma migrate deploy && npm run start"
+    env_file: [.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+    expose: ["3000"]
+    # `web` vive en DOS redes: la interna, donde habla con Postgres y Redis, y
+    # la de Dokploy, que es la única que Traefik mira. Sin la segunda, las
+    # etiquetas de abajo no las ve nadie y el dominio da 404.
+    networks: [default, dokploy-network]
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: dokploy-network
+      # El puerto se declara explícito porque `web` está en dos redes y
+      # Traefik, ante la duda, elige mal.
+      traefik.http.services.openreply.loadbalancer.server.port: "3000"
+      # HTTPS
+      traefik.http.routers.openreply.rule: Host(`mkt.fvr.mx`)
+      traefik.http.routers.openreply.entrypoints: websecure
+      traefik.http.routers.openreply.tls.certresolver: letsencrypt
+      # HTTP: solo existe para que Let's Encrypt pueda validar el dominio y
+      # para reenviar a HTTPS. Meta exige https en el webhook, así que dejar
+      # el 80 sirviendo la app sería dejar una puerta que nadie vigila.
+      traefik.http.routers.openreply-http.rule: Host(`mkt.fvr.mx`)
+      traefik.http.routers.openreply-http.entrypoints: web
+      traefik.http.routers.openreply-http.middlewares: openreply-a-https
+      traefik.http.middlewares.openreply-a-https.redirectscheme.scheme: https
+      traefik.http.middlewares.openreply-a-https.redirectscheme.permanent: "true"
+
+  worker:
+    image: openreply:latest
+    restart: unless-stopped
+    command: npx tsx worker/dm-worker.ts
+    env_file: [.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis:    { condition: service_healthy }
+      web:      { condition: service_started }
+
+networks:
+  default:
+  dokploy-network:
+    external: true
+
+volumes:
+  pgdata:
+  redisdata:

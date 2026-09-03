@@ -2,7 +2,9 @@ node_modules
 .next
 .git
 .env
-.env.local
-__tests__
-docs
-*.md
+.env.*
+*.log
+.DS_Store
+configurar-env.sh
+conectar-vps.sh
+panel.sh
