@@ -1,0 +1,61 @@
+name: Desplegar en el VPS
+
+# Cada vez que CI pasa en main, el VPS (mkt.fvr.mx) se actualiza solo.
+#
+# La llave VPS_DEPLOY_KEY sólo puede correr /usr/local/sbin/openreply-deploy.sh
+# en el servidor (command= en authorized_keys): no abre una terminal ni sirve
+# para nada más. El script hace el trabajo, revisa /api/health y, si la versión
+# nueva no queda sana, regresa a la anterior y avisa por Telegram.
+#
+# Secreto necesario (Settings → Secrets and variables → Actions):
+#   * VPS_DEPLOY_KEY — llave privada ed25519 de despliegue
+#
+# También se puede lanzar a mano desde la pestaña Actions (workflow_dispatch).
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+# Dos fusiones seguidas se despliegan en orden, nunca a la vez.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Desplegar mkt.fvr.mx
+    # Sólo pushes a main de este repo con CI en verde; nunca PRs ni forks.
+    if: >-
+      github.repository == 'jblackaller92-maker/openreply' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Preparar la llave
+        env:
+          VPS_DEPLOY_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$VPS_DEPLOY_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          # La huella del servidor va fija en el repo: si alguien suplanta la
+          # IP, la conexión se rechaza en vez de mandarle la llave.
+          cp deploy/known_hosts ~/.ssh/known_hosts
+
+      - name: Desplegar
+        env:
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o ServerAliveInterval=30 root@179.198.197.212 "$SHA"
