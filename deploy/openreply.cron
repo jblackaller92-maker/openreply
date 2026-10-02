@@ -1,0 +1,9 @@
+# openreply — los tres trabajos que en Vercel declaraba vercel.json.
+# Horas en UTC: el VPS corre en UTC, así que 05:00 aquí son las 23:00 en
+# Ciudad de México. Se dejan de madrugada a propósito.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+0 5 * * * root /usr/local/sbin/openreply-cron.sh refresh-tokens
+0 6 * * * root /usr/local/sbin/openreply-cron.sh attach-next-reel
+0 7 * * * root /usr/local/sbin/openreply-cron.sh snapshot-followers
