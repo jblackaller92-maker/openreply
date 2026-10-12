@@ -48,7 +48,7 @@ function surveyCard(c: FollowGatedCampaign) {
     subtitle: es
       ? `Síguenos en @${user} y toca «Ya los sigo» para recibirlo en tu correo.`
       : `Follow @${user}, then tap «I'm following» to get it by email.`,
-    image_url: `${getBaseUrl()}/informe-img/tarjeta-seguir-${es ? "es" : "en"}.jpg`,
+    image_url: `${getBaseUrl()}/informe-img/tarjeta-seguir-v2-${es ? "es" : "en"}.jpg`,
   };
 }
 
