@@ -7,6 +7,7 @@ const {
   mockSendPrivateReplyWithButton,
   mockGetUserFollowStatus,
   mockSendDirectMessageWithButton,
+  mockSendTemplateMessage,
   mockSendDirectMessage,
   mockSendDirectMessageWithLinkButton,
   mockDecryptToken,
@@ -40,6 +41,7 @@ const {
   mockSendPrivateReplyWithButton: vi.fn(),
   mockGetUserFollowStatus: vi.fn(),
   mockSendDirectMessageWithButton: vi.fn(),
+  mockSendTemplateMessage: vi.fn(),
   mockSendDirectMessage: vi.fn(),
   mockSendDirectMessageWithLinkButton: vi.fn(),
   mockDecryptToken: vi.fn(),
@@ -60,6 +62,7 @@ vi.mock("@/lib/meta/client", () => ({
   sendPrivateReplyWithButton: mockSendPrivateReplyWithButton,
   getUserFollowStatus: mockGetUserFollowStatus,
   sendDirectMessageWithButton: mockSendDirectMessageWithButton,
+  sendTemplateMessage: mockSendTemplateMessage,
   sendDirectMessage: mockSendDirectMessage,
   sendDirectMessageWithLinkButton: mockSendDirectMessageWithLinkButton,
   sendCommentReply: vi.fn(),
@@ -601,13 +604,20 @@ describe("DM Worker — Full Pipeline", () => {
 
     // The follow prompt goes out with a `followcheck:` postback button; the
     // link is NOT delivered yet.
-    expect(mockSendPrivateReplyWithButton).toHaveBeenCalledWith(
+    // Two buttons: open the profile (Instagram has no "follow" button) and
+    // the `followcheck:` postback that re-verifies.
+    expect(mockSendTemplateMessage).toHaveBeenCalledWith(
       "decrypted_token",
       "ig_456",
-      "comment_555",
-      "Follow me first commenter_user, then tap 👇",
-      "I'm following ✅",
-      "followcheck:auto_789"
+      { comment_id: "comment_555" },
+      {
+        template_type: "button",
+        text: "Follow me first commenter_user, then tap 👇",
+        buttons: [
+          expect.objectContaining({ type: "web_url", url: expect.stringContaining("instagram.com/") }),
+          { type: "postback", title: "I'm following ✅", payload: "followcheck:auto_789" },
+        ],
+      }
     );
     expect(mockSendPrivateReplyWithLinkButton).not.toHaveBeenCalled();
     expect(mockSendPrivateReply).not.toHaveBeenCalled();
@@ -763,6 +773,7 @@ describe("DM Worker — Full Pipeline", () => {
     // Non-follower on a read fallback: no link, and no re-prompt spam either.
     expect(mockSendDirectMessage).not.toHaveBeenCalled();
     expect(mockSendDirectMessageWithButton).not.toHaveBeenCalled();
+    expect(mockSendTemplateMessage).not.toHaveBeenCalled();
     expect(mockReserveWorkspaceDMSend).not.toHaveBeenCalled();
   });
 
@@ -1051,13 +1062,16 @@ describe("DM Worker — DM keyword trigger", () => {
     const processor = getProcessor();
     await processor(createMockMessageJob());
 
-    expect(mockSendDirectMessageWithButton).toHaveBeenCalledWith(
+    expect(mockSendTemplateMessage).toHaveBeenCalledWith(
       "decrypted_token",
       "ig_456",
-      "commenter_999",
-      expect.any(String),
-      "I'm following ✅",
-      "followcheck:auto_789"
+      { id: "commenter_999" },
+      expect.objectContaining({
+        template_type: "button",
+        buttons: expect.arrayContaining([
+          { type: "postback", title: "I'm following ✅", payload: "followcheck:auto_789" },
+        ]),
+      })
     );
     expect(mockSendDirectMessage).not.toHaveBeenCalled();
   });
@@ -1073,7 +1087,7 @@ describe("DM Worker — DM keyword trigger", () => {
     const processor = getProcessor();
     await processor(createMockMessageJob());
 
-    expect(mockSendDirectMessageWithButton).toHaveBeenCalled();
+    expect(mockSendTemplateMessage).toHaveBeenCalled();
     expect(mockSendDirectMessage).not.toHaveBeenCalled();
   });
 
