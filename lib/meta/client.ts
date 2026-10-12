@@ -772,3 +772,32 @@ export async function debugToken(inputToken: string, accessToken: string) {
   const response = await fetch(url.toString());
   return handleResponse(response);
 }
+
+/**
+ * Send any message template (button or generic) to a comment (private reply)
+ * or to a user's IGSID. The follow prompt builds its payload in
+ * lib/meta/follow-prompt.ts and falls back between template kinds.
+ */
+export async function sendTemplateMessage(
+  accessToken: string,
+  instagramAccountId: string,
+  recipient: { comment_id: string } | { id: string },
+  payload: Record<string, unknown>
+): Promise<{ recipient_id: string; message_id: string }> {
+  const response = await fetch(
+    `${instagramGraphBase()}/${instagramAccountId}/messages`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        recipient,
+        message: { attachment: { type: "template", payload } },
+      }),
+    }
+  );
+
+  return handleResponse(response);
+}

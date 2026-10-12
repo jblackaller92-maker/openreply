@@ -9,8 +9,8 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { getBaseUrl } from "@/lib/env";
-import { getUserFollowStatus, sendDirectMessage, sendDirectMessageWithButton, sendDirectMessageWithLinkButton } from "@/lib/meta/client";
-import { renderMessageWithoutLink } from "@/lib/tracking/message";
+import { getUserFollowStatus, sendDirectMessage, sendDirectMessageWithLinkButton } from "@/lib/meta/client";
+import { sendFollowPrompt } from "@/lib/meta/follow-prompt";
 import { decryptToken } from "@/lib/meta/oauth";
 import { DEFAULT_COUNTRY, countryByA2, findCountry, findEmail, stripEmails, type Locale } from "./datos";
 import { buildReportEmail, sendReportEmail } from "./email";
@@ -121,10 +121,13 @@ export async function captureLeadFromMessage(message: InboundMessage): Promise<b
         select: { commenterName: true },
       });
       try {
-        await sendDirectMessageWithButton(token, automation.instagramAccount.instagramId, message.senderId,
-          renderMessageWithoutLink({ message: automation.followPromptMessage || "", commenterName: prior?.commenterName ?? null }),
-          automation.followPromptButtonLabel || "I'm following ✅",
-          `followcheck:${automation.id}`);
+        await sendFollowPrompt({
+          accessToken: token,
+          campaign: automation,
+          to: { userId: message.senderId },
+          commenterName: prior?.commenterName ?? null,
+          defaultText: "",
+        });
       } catch (error) {
         console.error("[Leads] Could not send the follow prompt:", error instanceof Error ? error.message : error);
       }

@@ -19,7 +19,6 @@ import {
   getUserFollowStatus,
   sendCommentReply,
   sendDirectMessage,
-  sendDirectMessageWithButton,
   sendDirectMessageWithLinkButton,
   sendPrivateReply,
   sendPrivateReplyWithButton,
@@ -34,6 +33,7 @@ import {
 } from "@/lib/billing/usage";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
 import { captureLeadFromMessage } from "@/lib/informe/leads";
+import { sendFollowPrompt } from "@/lib/meta/follow-prompt";
 import {
   buildTrackedUrl,
   renderMessageWithTracking,
@@ -543,10 +543,10 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     // (opening DM → follow gate → link). Without an opening DM, we check follow
     // status at comment time: confirmed followers get the link now, everyone
     // else gets the "follow me first" prompt (re-verified on tap).
-    let sendFollowPrompt = false;
+    let needsFollowPrompt = false;
     if (automation.requireFollow && !useOpeningDm) {
       const alreadyFollows = await getUserFollowStatus(accessToken, commenterId);
-      sendFollowPrompt = alreadyFollows !== true;
+      needsFollowPrompt = alreadyFollows !== true;
     }
 
     try {
@@ -566,21 +566,15 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
             ? `followcheck:${automation.id}`
             : `reveal:${automation.id}`
         );
-      } else if (sendFollowPrompt) {
-        const promptText = renderMessageWithoutLink({
-          message:
-            automation.followPromptMessage ||
-            "quick favor before i send your link. i don't make any money from this, it's free. if you want to support me, just don't unfollow after, and star the repo on github if it helps you. tap the button once you're following and i'll send it over",
-          commenterName,
-        });
-        await sendPrivateReplyWithButton(
+      } else if (needsFollowPrompt) {
+        await sendFollowPrompt({
           accessToken,
-          automation.instagramAccount.instagramId,
-          commentId,
-          promptText,
-          automation.followPromptButtonLabel || "i'm following",
-          `followcheck:${automation.id}`
-        );
+          campaign: automation,
+          to: { commentId },
+          commenterName: commenterName ?? null,
+          defaultText:
+            "quick favor before i send your link. i don't make any money from this, it's free. if you want to support me, just don't unfollow after, and star the repo on github if it helps you. tap the button once you're following and i'll send it over",
+        });
       } else if (automation.trackedLinks.length > 0) {
         // Try button template first; if Meta rejects it, fall back to inline links.
         const bodyText =
@@ -756,21 +750,15 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
     const follows = await getUserFollowStatus(accessToken, userId);
     if (follows === false) {
       if (fallback) return;
-      const promptText = renderMessageWithoutLink({
-        message:
-          automation.followPromptMessage ||
-          "quick favor before i send your link. i don't make any money from this, it's free. if you want to support me, just don't unfollow after, and star the repo on github if it helps you. tap the button once you're following and i'll send it over",
-        commenterName,
-      });
       try {
-        await sendDirectMessageWithButton(
+        await sendFollowPrompt({
           accessToken,
-          automation.instagramAccount.instagramId,
-          userId,
-          promptText,
-          automation.followPromptButtonLabel || "i'm following",
-          `followcheck:${automation.id}`
-        );
+          campaign: automation,
+          to: { userId },
+          commenterName,
+          defaultText:
+            "quick favor before i send your link. i don't make any money from this, it's free. if you want to support me, just don't unfollow after, and star the repo on github if it helps you. tap the button once you're following and i'll send it over",
+        });
       } catch (error) {
         console.log(
           "[DM Worker] Failed to re-send follow prompt:",
@@ -1076,10 +1064,10 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     // postback path's fail-open one. Fail-open is only safe after a tap, where
     // the user has already claimed to follow; here it would hand the link to
     // anyone whose status the API happens not to resolve.
-    let sendFollowPrompt = false;
+    let needsFollowPrompt = false;
     if (automation.requireFollow) {
       const follows = await getUserFollowStatus(accessToken, senderId);
-      sendFollowPrompt = follows !== true;
+      needsFollowPrompt = follows !== true;
     }
 
     const usage = await reserveWorkspaceDMSend(automation.workspaceId);
@@ -1105,21 +1093,14 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     }
 
     try {
-      if (sendFollowPrompt) {
-        const promptText = renderMessageWithoutLink({
-          message:
-            automation.followPromptMessage ||
-            "Almost there! Follow me and tap the button below to grab your link 💛",
-          commenterName,
-        });
-        await sendDirectMessageWithButton(
+      if (needsFollowPrompt) {
+        await sendFollowPrompt({
           accessToken,
-          automation.instagramAccount.instagramId,
-          senderId,
-          promptText,
-          automation.followPromptButtonLabel || "I'm following ✅",
-          `followcheck:${automation.id}`
-        );
+          campaign: automation,
+          to: { userId: senderId },
+          commenterName,
+          defaultText: "Almost there! Follow me and tap the button below to grab your link 💛",
+        });
       } else {
         await sendRevealDirectMessage(
           accessToken,
