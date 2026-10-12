@@ -9,7 +9,7 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { getBaseUrl } from "@/lib/env";
-import { sendDirectMessage } from "@/lib/meta/client";
+import { getUserFollowStatus, sendDirectMessage, sendDirectMessageWithLinkButton } from "@/lib/meta/client";
 import { decryptToken } from "@/lib/meta/oauth";
 import { DEFAULT_COUNTRY, countryByA2, findCountry, findEmail, stripEmails, type Locale } from "./datos";
 import { buildReportEmail, sendReportEmail } from "./email";
@@ -51,19 +51,27 @@ export async function deliverReport(leadId: string): Promise<{ ok: boolean; erro
 const CONFIRM = {
   es: {
     ok: (country: string, email: string, guessed: boolean) =>
-      `¡Gracias! Te mandamos el informe ISO Survey 2025 de ${country} a ${email}.\n\n` +
-      `Si no lo ves en unos minutos, revisa promociones o correo no deseado.` +
-      (guessed ? `\n\nNo encontramos tu país en el mensaje, así que va el de ${country}. Dentro del informe puedes cambiarlo por el tuyo.` : ""),
+      `¡Listo! 🎉 Tu informe ISO Survey 2025 ya va en camino a ${email}.\n\n` +
+      (guessed
+        ? `Te mandamos el de ${country}; dentro del informe puedes cambiarlo por cualquier país.\n\n`
+        : `Es el de ${country}, y dentro puedes compararlo con cualquier otro país.\n\n`) +
+      `Si no lo ves en unos minutos, échale un ojo a promociones o correo no deseado.`,
     failed: (email: string) =>
-      `No pudimos enviar el informe a ${email}. ¿Puedes revisar el correo y mandárnoslo de nuevo?`,
+      `Uy, no pudimos enviarlo a ${email} 😕 ¿Nos compartes tu correo de nuevo?`,
+    follow: "Gracias por leernos 💚 Cada semana compartimos datos y claves de certificación ISO. ¿Nos sigues para no perderte el siguiente?",
+    followButton: "Seguir a FVR",
   },
   en: {
     ok: (country: string, email: string, guessed: boolean) =>
-      `Thanks! We sent the ISO Survey 2025 report for ${country} to ${email}.\n\n` +
-      `If you don't see it in a few minutes, check your promotions or spam folder.` +
-      (guessed ? `\n\nWe couldn't find your country in your message, so it's the one for ${country}. You can switch to yours inside the report.` : ""),
+      `All set! 🎉 Your ISO Survey 2025 report is on its way to ${email}.\n\n` +
+      (guessed
+        ? `We sent the one for ${country}; inside the report you can switch to any country.\n\n`
+        : `It's the one for ${country}, and inside you can compare it with any other country.\n\n`) +
+      `If you don't see it in a few minutes, check your promotions or spam folder.`,
     failed: (email: string) =>
-      `We couldn't send the report to ${email}. Could you check the address and send it again?`,
+      `Oops, we couldn't send it to ${email} 😕 Could you share your email again?`,
+    follow: "Thanks for reading 💚 Every week we share data and insights on ISO certification. Follow us so you don't miss the next one?",
+    followButton: "Follow FVR",
   },
 } as const;
 
@@ -138,7 +146,17 @@ export async function captureLeadFromMessage(message: InboundMessage): Promise<b
       const name = country ? (locale === "es" ? country.es : country.en) : countryA2;
       const text = result.ok ? CONFIRM[locale].ok(name, email, !found) : CONFIRM[locale].failed(email);
       await sendDirectMessage(accessToken, automation.instagramAccount.instagramId, message.senderId, text);
-      if (result.ok) await prisma.lead.update({ where: { id: lead.id }, data: { dmConfirmedAt: new Date() } });
+      if (result.ok) {
+        await prisma.lead.update({ where: { id: lead.id }, data: { dmConfirmedAt: new Date() } });
+        // Invite to follow, with a button to the profile — only if they don't
+        // already follow (null = Meta didn't say: invite anyway).
+        const follows = await getUserFollowStatus(accessToken, message.senderId);
+        const username = automation.instagramAccount.username;
+        if (follows !== true && username) {
+          await sendDirectMessageWithLinkButton(accessToken, automation.instagramAccount.instagramId, message.senderId,
+            CONFIRM[locale].follow, [{ title: CONFIRM[locale].followButton, url: `https://www.instagram.com/${username}/` }]);
+        }
+      }
     } catch (error) {
       console.error("[Leads] Could not confirm in the chat:", error instanceof Error ? error.message : error);
     }
