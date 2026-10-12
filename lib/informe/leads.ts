@@ -59,6 +59,8 @@ const CONFIRM = {
       `Si no lo ves en unos minutos, échale un ojo a promociones o correo no deseado.`,
     failed: (email: string) =>
       `Uy, no pudimos enviarlo a ${email} 😕 ¿Nos compartes tu correo de nuevo?`,
+    pending: (email: string) =>
+      `¡Gracias! 🙌 Ya tenemos tu correo: ${email}.\n\nÚltimo paso: síguenos y toca «Ya los sigo» para que te mandemos tu informe 👇`,
     follow: "Gracias por leernos 💚 Cada semana compartimos datos y claves de certificación ISO. ¿Nos sigues para no perderte el siguiente?",
     followButton: "Seguir a FVR",
   },
@@ -71,6 +73,8 @@ const CONFIRM = {
       `If you don't see it in a few minutes, check your promotions or spam folder.`,
     failed: (email: string) =>
       `Oops, we couldn't send it to ${email} 😕 Could you share your email again?`,
+    pending: (email: string) =>
+      `Thanks! 🙌 We've got your email: ${email}.\n\nOne last step: follow us and tap «I'm following» so we can send your report 👇`,
     follow: "Thanks for reading 💚 Every week we share data and insights on ISO certification. Follow us so you don't miss the next one?",
     followButton: "Follow FVR",
   },
@@ -107,34 +111,6 @@ export async function captureLeadFromMessage(message: InboundMessage): Promise<b
   const already = await prisma.lead.findUnique({ where: { messageId: message.messageId } });
   if (already) return true;
 
-  // Follow gate: a campaign that requires a follow must not hand out the report
-  // to someone who skipped the button and typed an email straight into the chat.
-  // A non-follower gets the follow prompt again (its button re-checks and then
-  // asks for the email). Unknown (null) falls through, like the worker's gate,
-  // so a real follower is never trapped.
-  if (automation.requireFollow && automation.instagramAccount.accessToken) {
-    const token = decryptToken(automation.instagramAccount.accessToken);
-    if ((await getUserFollowStatus(token, message.senderId)) === false) {
-      const prior = await prisma.dmLog.findFirst({
-        where: { commenterId: message.senderId, instagramAccountId: automation.instagramAccountId },
-        orderBy: { createdAt: "desc" },
-        select: { commenterName: true },
-      });
-      try {
-        await sendFollowPrompt({
-          accessToken: token,
-          campaign: automation,
-          to: { userId: message.senderId },
-          commenterName: prior?.commenterName ?? null,
-          defaultText: "",
-        });
-      } catch (error) {
-        console.error("[Leads] Could not send the follow prompt:", error instanceof Error ? error.message : error);
-      }
-      return true;
-    }
-  }
-
   const locale = asLocale(automation.leadLocale);
   // The email's own domain (".mx") must not be read as a country.
   const rest = stripEmails(message.messageText);
@@ -149,6 +125,7 @@ export async function captureLeadFromMessage(message: InboundMessage): Promise<b
     select: { commenterName: true, automationId: true },
   });
 
+  // The email is saved first, always: the person already gave it.
   const lead = await prisma.lead.create({
     data: {
       workspaceId: automation.workspaceId,
@@ -166,30 +143,117 @@ export async function captureLeadFromMessage(message: InboundMessage): Promise<b
     },
   });
 
-  const result = await deliverReport(lead.id);
-
-  if (automation.instagramAccount.accessToken) {
-    try {
-      const accessToken = decryptToken(automation.instagramAccount.accessToken);
-      const country = countryByA2(countryA2);
-      const name = country ? (locale === "es" ? country.es : country.en) : countryA2;
-      const text = result.ok ? CONFIRM[locale].ok(name, email, !found) : CONFIRM[locale].failed(email);
-      await sendDirectMessage(accessToken, automation.instagramAccount.instagramId, message.senderId, text);
-      if (result.ok) {
-        await prisma.lead.update({ where: { id: lead.id }, data: { dmConfirmedAt: new Date() } });
-        // Invite to follow, with a button to the profile — only if they don't
-        // already follow (null = Meta didn't say: invite anyway).
-        const follows = await getUserFollowStatus(accessToken, message.senderId);
-        const username = automation.instagramAccount.username;
-        if (follows !== true && username) {
-          await sendDirectMessageWithLinkButton(accessToken, automation.instagramAccount.instagramId, message.senderId,
-            CONFIRM[locale].follow, [{ title: CONFIRM[locale].followButton, url: `https://www.instagram.com/${username}/` }]);
-        }
-      }
-    } catch (error) {
-      console.error("[Leads] Could not confirm in the chat:", error instanceof Error ? error.message : error);
-    }
+  if (!automation.instagramAccount.accessToken) {
+    await deliverReport(lead.id);
+    return true;
   }
+  const accessToken = decryptToken(automation.instagramAccount.accessToken);
+
+  // Follow gate, AFTER the email (director, 12-oct): a non-follower keeps the
+  // lead pending and gets the follow card; its «I'm following» tap re-checks
+  // and sends the report (finishLeadAfterFollow). Unknown (null) goes through,
+  // so a real follower is never trapped.
+  if (automation.requireFollow && (await getUserFollowStatus(accessToken, message.senderId)) === false) {
+    try {
+      await sendDirectMessage(accessToken, automation.instagramAccount.instagramId, message.senderId, CONFIRM[locale].pending(email));
+      await sendFollowPrompt({
+        accessToken,
+        campaign: automation,
+        to: { userId: message.senderId },
+        commenterName: prior?.commenterName ?? null,
+        defaultText: "",
+      });
+    } catch (error) {
+      console.error("[Leads] Could not send the follow prompt:", error instanceof Error ? error.message : error);
+    }
+    return true;
+  }
+
+  await deliverAndConfirm({ leadId: lead.id, automation, userId: message.senderId, accessToken, inviteToFollow: true });
+  return true;
+}
+
+type LeadCampaign = {
+  instagramAccountId: string;
+  instagramAccount: { instagramId: string; username: string };
+  requireFollow: boolean;
+  followPromptMessage: string | null;
+  followPromptButtonLabel: string | null;
+  collectEmail: boolean;
+  leadLocale: string | null;
+  id: string;
+};
+
+/** Sends the report of a lead and confirms in the chat. */
+async function deliverAndConfirm(args: {
+  leadId: string;
+  automation: LeadCampaign;
+  userId: string;
+  accessToken: string;
+  inviteToFollow: boolean;
+}): Promise<void> {
+  const { automation, userId, accessToken } = args;
+  const result = await deliverReport(args.leadId);
+  const lead = await prisma.lead.findUniqueOrThrow({ where: { id: args.leadId } });
+  const locale = asLocale(lead.locale);
+  try {
+    const country = countryByA2(lead.countryA2);
+    const name = country ? (locale === "es" ? country.es : country.en) : (lead.countryA2 ?? "");
+    const guessed = !findCountry(lead.countryRaw ?? "");
+    const text = result.ok ? CONFIRM[locale].ok(name, lead.email, guessed) : CONFIRM[locale].failed(lead.email);
+    await sendDirectMessage(accessToken, automation.instagramAccount.instagramId, userId, text);
+    if (!result.ok) return;
+    await prisma.lead.update({ where: { id: lead.id }, data: { dmConfirmedAt: new Date() } });
+    // Invite to follow, with a button to the profile — only if they don't
+    // already follow (null = Meta didn't say: invite anyway).
+    if (args.inviteToFollow) {
+      const follows = await getUserFollowStatus(accessToken, userId);
+      const username = automation.instagramAccount.username;
+      if (follows !== true && username) {
+        await sendDirectMessageWithLinkButton(accessToken, automation.instagramAccount.instagramId, userId,
+          CONFIRM[locale].follow, [{ title: CONFIRM[locale].followButton, url: `https://www.instagram.com/${username}/` }]);
+      }
+    }
+  } catch (error) {
+    console.error("[Leads] Could not confirm in the chat:", error instanceof Error ? error.message : error);
+  }
+}
+
+/**
+ * The «I'm following» tap of a lead campaign. If the person left an email that
+ * is still waiting for the follow, verify the follow and send the report (or
+ * the card again). Returns false when there is no pending email, so the worker
+ * carries on with its normal flow (asking for the email).
+ */
+export async function finishLeadAfterFollow(args: {
+  automation: LeadCampaign;
+  userId: string;
+  accessToken: string;
+  commenterName: string | null;
+}): Promise<boolean> {
+  const { automation, userId, accessToken } = args;
+  const pending = await prisma.lead.findFirst({
+    where: {
+      igUserId: userId,
+      instagramAccountId: automation.instagramAccountId,
+      source: "INSTAGRAM_DM",
+      emailSentAt: null,
+      unsubscribedAt: null,
+      createdAt: { gte: new Date(Date.now() - 7 * 24 * 3600_000) },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!pending) return false;
+
+  if (automation.requireFollow && (await getUserFollowStatus(accessToken, userId)) === false) {
+    try {
+      await sendFollowPrompt({ accessToken, campaign: automation, to: { userId }, commenterName: args.commenterName, defaultText: "" });
+    } catch (error) {
+      console.error("[Leads] Could not re-send the follow prompt:", error instanceof Error ? error.message : error);
+    }
+    return true;
+  }
+  await deliverAndConfirm({ leadId: pending.id, automation, userId, accessToken, inviteToFollow: false });
   return true;
 }
 

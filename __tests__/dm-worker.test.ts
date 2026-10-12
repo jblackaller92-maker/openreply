@@ -581,6 +581,33 @@ describe("DM Worker — Full Pipeline", () => {
     );
   });
 
+  it("asks a lead campaign's commenter for the email first — the follow card waits for the email", async () => {
+    mockGetUserFollowStatus.mockResolvedValue(false); // not following yet
+    mockPrisma.automation.findMany.mockResolvedValue([
+      {
+        ...mockAutomation,
+        requireFollow: true,
+        collectEmail: true,
+        leadLocale: "es",
+        dmMessage: "¿A qué correo te mandamos tu informe, {username}?",
+        followPromptMessage: "Síguenos y toca 👇",
+        followPromptButtonLabel: "Ya los sigo ✅",
+        trackedLinks: [],
+      },
+    ]);
+
+    const processor = getProcessor();
+    await processor(createMockJob());
+
+    expect(mockSendTemplateMessage).not.toHaveBeenCalled();
+    expect(mockSendPrivateReply).toHaveBeenCalledWith(
+      "decrypted_token",
+      "ig_456",
+      "comment_555",
+      expect.stringContaining("¿A qué correo te mandamos tu informe")
+    );
+  });
+
   it("should send a follow-gate prompt when a non-follower comments", async () => {
     mockGetUserFollowStatus.mockResolvedValue(false); // not following yet
     mockPrisma.automation.findMany.mockResolvedValue([

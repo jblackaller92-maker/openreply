@@ -28,7 +28,7 @@ describe("follow prompt", () => {
     expect(card.title).toBe("Tu informe ISO Survey 2025");
     expect(card.subtitle).toContain("@fvr.mx");
     expect(card.subtitle.length).toBeLessThanOrEqual(80);
-    expect(card.image_url).toBe("https://mkt.fvr.mx/informe-img/tarjeta-seguir-es.jpg");
+    expect(card.image_url).toBe("https://mkt.fvr.mx/informe-img/tarjeta-seguir-v2-es.jpg");
     expect(card.buttons).toEqual([
       { type: "web_url", title: "Ir al perfil", url: "https://www.instagram.com/fvr.mx/" },
       { type: "postback", title: "Ya los sigo ✅", payload: "followcheck:auto_1" },

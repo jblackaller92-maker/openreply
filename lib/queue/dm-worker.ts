@@ -32,7 +32,7 @@ import {
   reserveWorkspaceDMSend,
 } from "@/lib/billing/usage";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
-import { captureLeadFromMessage } from "@/lib/informe/leads";
+import { captureLeadFromMessage, finishLeadAfterFollow } from "@/lib/informe/leads";
 import { sendFollowPrompt } from "@/lib/meta/follow-prompt";
 import {
   buildTrackedUrl,
@@ -544,7 +544,9 @@ async function processComment(job: Job<ProcessCommentJob>): Promise<void> {
     // status at comment time: confirmed followers get the link now, everyone
     // else gets the "follow me first" prompt (re-verified on tap).
     let needsFollowPrompt = false;
-    if (automation.requireFollow && !useOpeningDm) {
+    // Lead-capture campaigns ask for the email FIRST; the follow gate comes when
+    // the email arrives (lib/informe/leads.ts), before the report is sent.
+    if (automation.requireFollow && !useOpeningDm && !automation.collectEmail) {
       const alreadyFollows = await getUserFollowStatus(accessToken, commenterId);
       needsFollowPrompt = alreadyFollows !== true;
     }
@@ -746,6 +748,12 @@ async function processPostback(job: Job<ProcessPostbackJob>): Promise<void> {
   // be bypassable by just reading the DM and waiting. Following, or
   // unverifiable (null), falls through and delivers the link — fail-open so a
   // real follower is never trapped.
+  // Lead campaigns: the tap comes after the email, so it finishes the pending
+  // lead (verify the follow, then send the report) instead of revealing the DM.
+  if (isFollowCheck && automation.collectEmail) {
+    if (await finishLeadAfterFollow({ automation, userId, accessToken, commenterName })) return;
+  }
+
   if ((isFollowCheck || fallback) && automation.requireFollow) {
     const follows = await getUserFollowStatus(accessToken, userId);
     if (follows === false) {
@@ -1065,7 +1073,7 @@ async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
     // the user has already claimed to follow; here it would hand the link to
     // anyone whose status the API happens not to resolve.
     let needsFollowPrompt = false;
-    if (automation.requireFollow) {
+    if (automation.requireFollow && !automation.collectEmail) {
       const follows = await getUserFollowStatus(accessToken, senderId);
       needsFollowPrompt = follows !== true;
     }
