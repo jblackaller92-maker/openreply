@@ -9,7 +9,8 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "@/lib/db/client";
 import { getBaseUrl } from "@/lib/env";
-import { getUserFollowStatus, sendDirectMessage, sendDirectMessageWithLinkButton } from "@/lib/meta/client";
+import { getUserFollowStatus, sendDirectMessage, sendDirectMessageWithButton, sendDirectMessageWithLinkButton } from "@/lib/meta/client";
+import { renderMessageWithoutLink } from "@/lib/tracking/message";
 import { decryptToken } from "@/lib/meta/oauth";
 import { DEFAULT_COUNTRY, countryByA2, findCountry, findEmail, stripEmails, type Locale } from "./datos";
 import { buildReportEmail, sendReportEmail } from "./email";
@@ -105,6 +106,31 @@ export async function captureLeadFromMessage(message: InboundMessage): Promise<b
 
   const already = await prisma.lead.findUnique({ where: { messageId: message.messageId } });
   if (already) return true;
+
+  // Follow gate: a campaign that requires a follow must not hand out the report
+  // to someone who skipped the button and typed an email straight into the chat.
+  // A non-follower gets the follow prompt again (its button re-checks and then
+  // asks for the email). Unknown (null) falls through, like the worker's gate,
+  // so a real follower is never trapped.
+  if (automation.requireFollow && automation.instagramAccount.accessToken) {
+    const token = decryptToken(automation.instagramAccount.accessToken);
+    if ((await getUserFollowStatus(token, message.senderId)) === false) {
+      const prior = await prisma.dmLog.findFirst({
+        where: { commenterId: message.senderId, instagramAccountId: automation.instagramAccountId },
+        orderBy: { createdAt: "desc" },
+        select: { commenterName: true },
+      });
+      try {
+        await sendDirectMessageWithButton(token, automation.instagramAccount.instagramId, message.senderId,
+          renderMessageWithoutLink({ message: automation.followPromptMessage || "", commenterName: prior?.commenterName ?? null }),
+          automation.followPromptButtonLabel || "I'm following ✅",
+          `followcheck:${automation.id}`);
+      } catch (error) {
+        console.error("[Leads] Could not send the follow prompt:", error instanceof Error ? error.message : error);
+      }
+      return true;
+    }
+  }
 
   const locale = asLocale(automation.leadLocale);
   // The email's own domain (".mx") must not be read as a country.
