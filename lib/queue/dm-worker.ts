@@ -33,6 +33,7 @@ import {
   reserveWorkspaceDMSend,
 } from "@/lib/billing/usage";
 import { recordWorkerAlert } from "@/lib/ops/worker-health";
+import { captureLeadFromMessage } from "@/lib/informe/leads";
 import {
   buildTrackedUrl,
   renderMessageWithTracking,
@@ -945,6 +946,17 @@ async function processFollowUp(job: Job<ProcessFollowUpJob>): Promise<void> {
  */
 async function processMessage(job: Job<ProcessMessageJob>): Promise<void> {
   const { instagramAccountId, messageId, messageText, senderId } = job.data;
+
+  // A reply that carries an email to an account running a lead-capture
+  // campaign is a report request: save it, email the report, confirm in chat.
+  // It never also runs the keyword autoreplies below.
+  try {
+    if (await captureLeadFromMessage({ instagramAccountId, messageId, messageText, senderId })) return;
+  } catch (error) {
+    // Let BullMQ retry: the lead is idempotent per message id.
+    console.error("[DM Worker] Lead capture failed:", error instanceof Error ? error.message : error);
+    throw error;
+  }
 
   const automations = await prisma.automation.findMany({
     where: {

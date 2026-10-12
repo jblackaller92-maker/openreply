@@ -81,6 +81,7 @@ model Workspace {
   automations       Automation[]
   dmLogs            DmLog[]
   trackedLinks      TrackedLink[]
+  leads             Lead[]
   linkClicks        LinkClick[]
   webhookEvents     WebhookEvent[]
   operationalEvents OperationalEvent[]
@@ -139,6 +140,7 @@ model InstagramAccount {
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   automations Automation[]
   dmLogs      DmLog[]
+  leads       Lead[]
   linkClicks  LinkClick[]
   followerSnapshots FollowerSnapshot[]
 
@@ -202,6 +204,11 @@ model Automation {
   wholeWordMatch Boolean @default(true)
   reportShareSlug    String? @unique
   reportShareEnabled Boolean @default(true)
+  // Lead capture: when on, an inbound DM to this account that contains an
+  // email address is saved as a Lead and answered with the ISO Survey report.
+  // leadLocale picks the language of the reply and the email ("es" | "en").
+  collectEmail       Boolean @default(false)
+  leadLocale         String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -211,6 +218,7 @@ model Automation {
   dmLogs           DmLog[]
   trackedLinks     TrackedLink[]
   linkClicks       LinkClick[]
+  leads            Lead[]
 
   @@index([workspaceId])
   @@index([instagramAccountId])
@@ -385,4 +393,40 @@ enum OperationalEventLevel {
   INFO
   WARNING
   ERROR
+}
+
+// A person who asked for the ISO Survey report and left an email, either by
+// replying to a campaign DM on Instagram or through the public web form.
+// `token` is the unguessable part of their personal report link.
+model Lead {
+  id                 String    @id @default(cuid())
+  workspaceId        String
+  instagramAccountId String?
+  automationId       String?
+  source             String // "INSTAGRAM_DM" | "WEB"
+  igUserId           String?
+  igUsername         String?
+  email              String
+  countryA2          String?
+  countryRaw         String?
+  locale             String    @default("es")
+  newsletterOptIn    Boolean   @default(false)
+  token              String    @unique
+  // The inbound DM that carried the email: makes a webhook retry idempotent.
+  messageId          String?   @unique
+  ipHash             String?
+  emailSentAt        DateTime?
+  emailError         String?
+  dmConfirmedAt      DateTime?
+  reportOpenedAt     DateTime?
+  unsubscribedAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  instagramAccount InstagramAccount? @relation(fields: [instagramAccountId], references: [id], onDelete: SetNull)
+  automation       Automation?       @relation(fields: [automationId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([email])
 }

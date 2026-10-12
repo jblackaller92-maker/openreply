@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { conflictMessage, findKeywordConflicts } from "@/lib/keywords/registry";
 import { z } from "zod";
 import { getCurrentWorkspaceId } from "@/lib/auth";
 import { prisma } from "@/lib/db/client";
@@ -60,6 +61,8 @@ const createAutomationSchema = z
     secondaryButtonLabel: z.string().max(20).optional().nullable(),
     isActive: z.boolean().optional().default(true),
     wholeWordMatch: z.boolean().optional().default(true),
+    collectEmail: z.boolean().optional().default(false),
+    leadLocale: z.enum(["es", "en"]).optional().nullable(),
   })
   // A campaign must target a specific post, any post, or the next reel.
   .refine(
@@ -107,6 +110,8 @@ const updateAutomationSchema = z.object({
   isActive: z.boolean().optional(),
   wholeWordMatch: z.boolean().optional(),
   reportShareEnabled: z.boolean().optional(),
+  collectEmail: z.boolean().optional(),
+  leadLocale: z.enum(["es", "en"]).optional().nullable(),
   // Empty string clears the tracked link; a URL updates/creates it; undefined
   // leaves it unchanged.
   trackedDestinationUrl: z
@@ -383,8 +388,24 @@ export async function POST(request: NextRequest) {
     .map((m) => m.trim())
     .filter(Boolean);
 
+  if (parsed.data.isActive && !matchAnyWord) {
+    const conflicts = await findKeywordConflicts({
+      workspaceId,
+      instagramAccountId: instagramAccount.id,
+      keywords: parsed.data.keywords,
+    });
+    if (conflicts.length > 0) {
+      return NextResponse.json(
+        { success: false, error: conflictMessage(conflicts), conflicts },
+        { status: 409 }
+      );
+    }
+  }
+
   const automation = await prisma.automation.create({
     data: {
+      collectEmail: parsed.data.collectEmail,
+      leadLocale: parsed.data.leadLocale ?? null,
       name: parsed.data.name,
       goal: parsed.data.goal,
       // A next-reel campaign has no post yet; the cron binds it once a reel is posted.
@@ -534,6 +555,23 @@ export async function PATCH(request: NextRequest) {
   if (automationData.publicReplyEnabled === false) {
     automationData.publicReplyMessages = [];
     automationData.publicReplyMessage = null;
+  }
+
+  const willBeActive = automationData.isActive ?? existing.isActive;
+  const willMatchAnyWord = automationData.matchAnyWord ?? existing.matchAnyWord;
+  if (willBeActive && !willMatchAnyWord) {
+    const conflicts = await findKeywordConflicts({
+      workspaceId,
+      instagramAccountId: existing.instagramAccountId,
+      keywords: automationData.keywords ?? existing.keywords,
+      excludeAutomationId: existing.id,
+    });
+    if (conflicts.length > 0) {
+      return NextResponse.json(
+        { success: false, error: conflictMessage(conflicts), conflicts },
+        { status: 409 }
+      );
+    }
   }
 
   const updated = await prisma.automation.update({
