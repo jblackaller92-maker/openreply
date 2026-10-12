@@ -226,7 +226,10 @@ input[type=range]{width:100%;accent-color:var(--acento);height:28px}
 .sec-ctl select,.sec-ctl input{font-family:var(--ui);font-size:.88rem;font-weight:600;color:var(--tinta);background:#fff;border:1px solid var(--gris);border-radius:999px;padding:.55rem 1rem}
 .sec-ctl input{min-width:220px;font-weight:500}
 .sec-g{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:3vw;align-items:start}
-.sec-lista{max-height:calc(100svh - 360px);overflow-y:auto;overscroll-behavior:contain;padding-right:6px}
+.sec-lista{min-height:0}
+.sec-pag{display:flex;align-items:center;gap:10px;margin-top:10px;font-size:.8rem;color:var(--tinta-2);font-weight:600}
+.sec-pag button{width:34px;height:34px;border-radius:50%;border:1px solid var(--gris);background:#fff;font-size:1rem;cursor:pointer;color:var(--tinta)}
+.sec-pag button:disabled{opacity:.3;cursor:default}
 .sf{display:grid;grid-template-columns:30px minmax(0,1fr) 120px 56px;gap:10px;align-items:center;padding:7px 8px;border-bottom:1px solid var(--linea);font-size:.86rem;cursor:pointer;border-radius:8px}
 .sf:hover{background:rgba(11,20,36,.04)} .sf.on{background:var(--tinta);color:#fff} .sf.on .cod,.sf.on .pc{color:rgba(255,255,255,.8)}
 .sf .cod{font-size:.72rem;font-weight:700;color:var(--suave)} .sf .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
@@ -239,7 +242,7 @@ input[type=range]{width:100%;accent-color:var(--acento);height:28px}
 .sd b{font-weight:700} .sd .bt{height:10px;border-radius:0 5px 5px 0} .sd em{font-style:normal;text-align:right;font-weight:700;color:var(--tinta-2)}
 .sec-nota{font-size:.78rem;color:var(--suave);margin-top:1.2vh;max-width:760px}
 .sec-vacio{padding:18px 6px;color:var(--tinta-2);font-size:.9rem}
-@media(max-width:820px){.sec-g{grid-template-columns:minmax(0,1fr)}.sec-lista{max-height:420px}.sf{grid-template-columns:26px minmax(0,1fr) 70px 48px}.sf .nm{white-space:normal;line-height:1.2}.sec-ctl input,.sec-ctl select{min-width:0;max-width:100%;flex:1 1 100%;box-sizing:border-box}.sd{grid-template-columns:96px minmax(0,1fr) 56px}}
+@media(max-width:820px){.sec-g{grid-template-columns:minmax(0,1fr)}.sf{grid-template-columns:26px minmax(0,1fr) 70px 48px}.sf .nm{white-space:normal;line-height:1.2}.sec-ctl input,.sec-ctl select{min-width:0;max-width:100%;flex:1 1 100%;box-sizing:border-box}.sd{grid-template-columns:96px minmax(0,1fr) 56px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 @media print{.nav,.puntos,.boceto,.desliza,#e-adivina{display:none!important}.recorrido{height:auto!important}.escenario{position:static;height:auto;overflow:visible}.escena{position:relative;opacity:1!important;visibility:visible!important;filter:none!important;transform:none!important;page-break-after:always}}
 </style></head>
@@ -286,7 +289,7 @@ input[type=range]{width:100%;accent-color:var(--acento);height:28px}
   <section class="escena oculta" data-nombre="sectores" id="e-sec"><div class="w">
     <p class="etq" id="secEtq"></p><h2 class="titulo" data-t="secH"></h2>
     <div class="sec-ctl"><div class="alterna" id="secAmb"><button data-a="pais" class="on" id="secAmbPais"></button><button data-a="mundo" data-t="secMundo"></button></div><select id="secNorma" aria-label="Norma"></select><input id="secBusca" type="search" autocomplete="off"></div>
-    <div class="sec-g"><div class="sec-lista desplazable" id="secLista"></div><div class="sec-det" id="secDet"></div></div>
+    <div class="sec-g"><div><div class="sec-lista" id="secLista"></div><div class="sec-pag" id="secPag"></div></div><div class="sec-det" id="secDet"></div></div>
     <p class="sec-nota" id="secNota"></p>
   </div></section>
 
@@ -596,7 +599,7 @@ const tpComp=document.getElementById("tpComp"); if(tpComp){ tpComp.innerHTML=opc
 
 // ---------- por industria (sectores IAF). Reparto entre los certificados que DECLARAN industria:
 // un certificado puede declarar varias, y en 2025 ISO no publica por país cuántos no la declaran.
-let secAmb="pais", secNorma="9001", secSel=null, secFiltro="";
+let secAmb="pais", secNorma="9001", secSel=null, secFiltro="", secPagina=0; const POR_PAGINA=10;
 const secNom=c=>SEC.nombres[c][L==="es"?0:1];
 const secFold=t=>t.normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
 function secDatos(k){ if(secAmb==="mundo"){ const a=SEC.mundo[k]; return a?Object.fromEntries(a.map((v,i)=>[String(i+1),v]).filter(x=>x[1])):null; } return (SEC.paises[pais.a2]||{})[k]||null; }
@@ -613,7 +616,13 @@ function pintaSec(){
   const tot=Object.values(d).reduce((a,b)=>a+b,0), filas=Object.entries(d).filter(x=>x[1]>0).sort((a,b)=>b[1]-a[1]), max=filas[0][1];
   if(!secSel||!d[secSel]) secSel=filas[0][0];
   const f=secFold(secFiltro), vis=filas.filter(([c])=>!f||secFold(secNom(c)).includes(f)||c===f);
-  lista.innerHTML=vis.length?vis.map(([c,v])=>`<div class="sf${c===secSel?" on":""}" data-c="${c}" title="${secNom(c)}"><span class="cod">${c}</span><span class="nm">${secNom(c)}</span><span class="bt"><i style="width:${(v/max*100).toFixed(1)}%;background:${col(secNorma)}"></i></span><span class="pc tab">${(v/tot*100).toFixed(v/tot<.01?1:0)}%</span></div>`).join(""):`<p class="sec-vacio">${T.secNada}</p>`;
+  // sin barra de desplazamiento: diez por página, con flechas
+  const paginas=Math.max(1,Math.ceil(vis.length/POR_PAGINA)); secPagina=Math.min(secPagina,paginas-1);
+  const ini=secPagina*POR_PAGINA, pag=vis.slice(ini,ini+POR_PAGINA);
+  document.getElementById("secPag").innerHTML=vis.length>POR_PAGINA?`<button id="secAnt" aria-label="←"${secPagina?"":" disabled"}>‹</button><span>${ini+1}–${ini+pag.length} ${T.de} ${vis.length}</span><button id="secSig" aria-label="→"${secPagina<paginas-1?"":" disabled"}>›</button>`:"";
+  const ant=document.getElementById("secAnt"), sig=document.getElementById("secSig");
+  if(ant) ant.onclick=()=>{ secPagina--; pintaSec(); }; if(sig) sig.onclick=()=>{ secPagina++; pintaSec(); };
+  lista.innerHTML=pag.length?pag.map(([c,v])=>`<div class="sf${c===secSel?" on":""}" data-c="${c}" title="${secNom(c)}"><span class="cod">${c}</span><span class="nm">${secNom(c)}</span><span class="bt"><i style="width:${(v/max*100).toFixed(1)}%;background:${col(secNorma)}"></i></span><span class="pc tab">${(v/tot*100).toFixed(v/tot<.01?1:0)}%</span></div>`).join(""):`<p class="sec-vacio">${T.secNada}</p>`;
   lista.querySelectorAll(".sf").forEach(el=>el.onclick=()=>{ secSel=el.dataset.c; pintaSec(); if(plano()) document.getElementById("secDet").scrollIntoView({behavior:"smooth",block:"nearest"}); });
   // la industria elegida: qué normas se certifican más en ella
   const otras=DATOS.normas.map(k=>{ const x=secDatos(k); return [k,x?(x[secSel]||0):0]; }).filter(x=>x[1]>0).sort((a,b)=>b[1]-a[1]), mx=(otras[0]||[0,1])[1];
@@ -623,10 +632,10 @@ function pintaSec(){
     ? T.secNotaMundo.replace("{x}",SEC.cobertura[secNorma]??"—").replace("{k}",ROT[secNorma])
     : T.secNotaPais;
 }
-document.querySelectorAll("#secAmb button").forEach(b=>b.onclick=()=>{ secAmb=b.dataset.a; secSel=null; pintaSec(); });
-document.getElementById("secNorma").onchange=e=>{ secNorma=e.target.value; secSel=null; pintaSec(); };
-const sb=document.getElementById("secBusca"); sb.placeholder=T.secBusca; sb.oninput=()=>{ secFiltro=sb.value.trim(); pintaSec(); };
-function eligePais(p){ pais=p; ["adivPais","formPais","tpPais"].forEach(id=>{const s=document.getElementById(id); if(s) s.value=p.a2;}); pintaMapa(); pintaRank(); pintaCandado(); if(abierto){ pintaPais(); secSel=null; pintaSec(); } }
+document.querySelectorAll("#secAmb button").forEach(b=>b.onclick=()=>{ secAmb=b.dataset.a; secSel=null; secPagina=0; pintaSec(); });
+document.getElementById("secNorma").onchange=e=>{ secNorma=e.target.value; secSel=null; secPagina=0; pintaSec(); };
+const sb=document.getElementById("secBusca"); sb.placeholder=T.secBusca; sb.oninput=()=>{ secFiltro=sb.value.trim(); secPagina=0; pintaSec(); };
+function eligePais(p){ pais=p; ["adivPais","formPais","tpPais"].forEach(id=>{const s=document.getElementById(id); if(s) s.value=p.a2;}); pintaMapa(); pintaRank(); pintaCandado(); if(abierto){ pintaPais(); secSel=null; secPagina=0; pintaSec(); } }
 
 // ---------- adivina + candado
 const slider=document.getElementById("slider"), guess=document.getElementById("guess");
