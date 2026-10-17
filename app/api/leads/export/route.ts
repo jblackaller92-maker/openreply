@@ -8,7 +8,8 @@ const cell = (v: unknown) => {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 
-// CSV of every lead, for the mailing list and for anyone who asks what we hold.
+// CSV of every lead (DM, web form and other sites via /api/leads/ingest), for the
+// mailing list and for anyone who asks what we hold.
 export async function GET() {
   const workspaceId = await getCurrentWorkspaceId();
   if (!workspaceId) return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -18,10 +19,13 @@ export async function GET() {
     orderBy: { createdAt: "asc" },
     include: { instagramAccount: { select: { username: true } } },
   });
-  const header = ["email", "pais", "pais_codigo", "idioma", "origen", "cuenta", "instagram", "boletin", "baja", "correo_enviado", "abrio_informe", "fecha"];
+  const header = ["email", "nombre", "empresa", "herramienta", "pais", "pais_codigo", "idioma", "origen", "cuenta", "instagram", "boletin", "baja", "correo_enviado", "abrio_informe", "fecha"];
   const rows = leads.map((l) =>
     [
       l.email,
+      l.name,
+      l.company,
+      l.origin,
       countryByA2(l.countryA2)?.es ?? "",
       l.countryA2,
       l.locale,

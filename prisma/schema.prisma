@@ -420,6 +420,12 @@ model Lead {
   dmConfirmedAt      DateTime?
   reportOpenedAt     DateTime?
   unsubscribedAt     DateTime?
+  // Leads that arrive from another site through /api/leads/ingest (e.g. the
+  // Señor Auditor self-assessment): who they are and which tool sent them.
+  name               String?
+  company            String?
+  origin             String?
+  data               Json?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -429,4 +435,5 @@ model Lead {
 
   @@index([workspaceId, createdAt])
   @@index([email])
+  @@index([workspaceId, origin])
 }
